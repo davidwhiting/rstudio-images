@@ -1,0 +1,159 @@
+FROM ubuntu:18.04
+LABEL maintainer="David Whiting <david.whiting@h2o.ai>"
+
+ARG RSTUDIO_VERSION=1.3.959
+
+##########################################################
+############ DON'T CHANGE ARG OR ENV BELOW ###############
+##########################################################
+
+ENV BASE=/opt
+ENV USERNAME="rstudio" 
+ENV HOME=/home/${USERNAME}
+
+# To keep tzdata from requesting time zones interactively
+ENV DEBIAN_FRONTEND=noninteractive
+
+##########################################################
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+USER root
+WORKDIR /tmp
+
+# Create user
+RUN useradd -ms /bin/bash ${USERNAME} \
+    && usermod -a -G sudo ${USERNAME} \
+    && echo "${USERNAME}:${USERNAME}" | chpasswd \
+    && echo "${USERNAME} ALL=NOPASSWD: ALL" >> /etc/sudoers 
+
+##################################
+####### UPDATE LINUX #############
+##################################
+
+RUN apt-get -y update \
+    ## Install sudo errors out unless we add extra options 
+    #  We use "-o Dpkg::Options::=--force-confdef" to keep old config
+    #  (use   "-o Dpkg::Options::=--force-confnew" to make new config)
+
+    && apt-get -y install -o Dpkg::Options::=--force-confdef sudo \
+    && apt-get -y install \
+
+          apt-transport-https \
+          apt-utils \
+          bzip2 \
+          ca-certificates \
+          ca-certificates-java \
+          cpio \
+          curl \
+          dirmngr \
+          fonts-liberation \
+          g++ \
+          gcc \
+          gdebi-core \
+          git \
+          graphviz \
+          iproute2 \
+          libclang-dev \
+          libcurl4-nss-dev \
+          locales \
+          net-tools \
+          nginx \
+          openjdk-8-jre-headless \
+          psmisc \
+          run-one \
+          software-properties-common \
+          systemd \
+          vim \
+          wget \
+          zip \
+    && apt --fix-broken install \
+
+    # Add locale
+    && locale-gen en_US.UTF-8 \
+    && update-locale LANG=en_US.UTF-8 \
+
+    # Cleanup 
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /tmp/* 
+
+# log directory used by run.sh
+RUN mkdir /log \
+    && chmod o+w /log 
+
+######################################
+############ R INSTALL ###############
+######################################
+
+ARG RECVKEYS=E298A3A825C0D65DFD57CBB651716619E084DAB9
+
+RUN mkdir -p /usr/local/lib/R/site-library \
+    && chmod 777 /usr/local/lib/R/site-library \
+    && apt-key adv --keyserver keyserver.ubuntu.com --recv-keys ${RECVKEYS} \
+
+    ## R 4.0 - not all dependencies available now
+    #&& add-apt-repository 'deb https://cloud.r-project.org/bin/linux/ubuntu bionic-cran40/' \
+
+    # R 3.6
+    && add-apt-repository 'deb https://cloud.r-project.org/bin/linux/ubuntu bionic-cran35/' \
+    && apt-get -y update \
+    && apt-get -y install \
+            r-base \
+            r-base-dev \
+
+    && R -e 'chooseCRANmirror(graphics=FALSE, ind=1);install.packages(c("littler","docopt"));' \
+    && ln -s /usr/local/lib/R/site-library/littler/examples/install2.r /usr/local/bin/install2.r \
+    && ln -s /usr/local/lib/R/site-library/littler/bin/r /usr/local/bin/r \
+
+    ## Cleanup 
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /tmp/* 
+
+RUN install2.r \
+        AutoModel AutoSEARCH Autoplotprotein AutoregressionMDE AzureML  \
+    && rm -rf /tmp/* 
+
+
+############################################
+############ RSTUDIO INSTALL ###############
+############################################
+
+#ARG RSTUDIO_URL="https://www.rstudio.org/download/latest/stable/server/bionic/rstudio-server-latest-amd64.deb"
+ARG RSTUDIO_URL="http://download2.rstudio.org/server/bionic/amd64/rstudio-server-${RSTUDIO_VERSION}-amd64.deb"
+
+RUN cd /tmp \
+    && wget ${RSTUDIO_URL} \
+#    && apt-get update \
+#    && apt-get install -y --no-install-recommends \
+#            libclang-dev \
+#            psmisc \
+#    && apt --fix-broken install \
+    && dpkg -i rstudio-server-*-amd64.deb \
+    && rm rstudio-server-*-amd64.deb \
+    && echo "server-app-armor-enabled=0" >> /etc/rstudio/rserver.conf \
+
+    # Change rserver default user 
+    && echo 'server-user=rstudio' >> /etc/rstudio/rserver.conf \
+    && rm -rf /var/log/rstudio-server \
+    && rm -rf /var/lib/rstudio-server \
+    && rm -rf /tmp/rstudio-rsession \
+    && rm -rf /tmp/rstudio-rserver \
+    && rstudio-server restart \
+
+    ## Cleanup 
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /tmp/* \
+    && rm -rf ${HOME}/.local 
+
+##########################################################
+### ----- RUN INFORMATION -----
+##########################################################
+
+USER ${USERNAME}
+WORKDIR ${HOME}
+ENV JAVA_HOME=/usr
+
+#ENTRYPOINT ["/run.sh"]
+
+EXPOSE 3838
+EXPOSE 8787
